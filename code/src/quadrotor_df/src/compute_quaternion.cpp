@@ -23,7 +23,11 @@ int main(int argc, char** argv) {
         // 默认输出到当前目录或solutions目录
         const char* home = std::getenv("HOME");
         if (home) {
-            output_file = std::string(home) + "/MRPC-2025-homework/solutions/df_quaternion.csv";
+            std::string solutions_dir = std::string(home) + "/MRPC-2025-homework/solutions";
+            // 创建目录（如果不存在）
+            std::string mkdir_cmd = "mkdir -p " + solutions_dir;
+            system(mkdir_cmd.c_str());
+            output_file = solutions_dir + "/df_quaternion.csv";
         } else {
             output_file = "df_quaternion.csv";
         }
@@ -33,6 +37,7 @@ int main(int argc, char** argv) {
     std::ofstream outfile(output_file);
     if (!outfile.is_open()) {
         std::cerr << "Error: Cannot open output file " << output_file << std::endl;
+        std::cerr << "Please check if the directory exists and you have write permissions." << std::endl;
         return -1;
     }
     

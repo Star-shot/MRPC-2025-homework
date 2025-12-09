@@ -36,6 +36,7 @@ include_directories(
 
 add_executable(compute_quaternion
     src/compute_quaternion.cpp
+    src/differential_flatness.cpp
 )
 
 target_link_libraries(compute_quaternion
