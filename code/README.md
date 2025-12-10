@@ -299,7 +299,7 @@ return path;
 首先要对文件进行编译。每次修改完代码之后，都要重新编译，所修改的内容才会生效。
 
 ```bash
-cd MRPC-2025-homework
+cd MRPC-2025-homework/code
 catkin_make
 ```
 
@@ -308,7 +308,7 @@ catkin_make
 编译成功之后，启动 launch 文件：
 
 ```bash
-cd MRPC-2025-homework
+cd MRPC-2025-homework/code
 source devel/setup.bash
 roslaunch trajectory_generator demo.launch
 ```
