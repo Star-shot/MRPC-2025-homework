@@ -44,6 +44,7 @@ Quadrotor::Quadrotor(void)    //模型的初始化
   state_.motor_rpm = Eigen::Array4d::Zero();
 
   external_force_.setZero();
+  external_moment_.setZero();
 
   updateInternalState();
 
@@ -191,9 +192,13 @@ void Quadrotor::operator()(const Quadrotor::InternalState& x,
 
 
   vnorm = cur_state.v;
-  if (vnorm.norm() != 0)
+  if (vnorm.norm() > 1e-6)
   {
     vnorm.normalize();
+  }
+  else
+  {
+    vnorm.setZero();
   }
 
   x_dot = cur_state.v;

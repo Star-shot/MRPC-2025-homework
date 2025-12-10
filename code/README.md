@@ -179,7 +179,7 @@ catkin_make
 测试一下无人机的悬停，确认代码补全正确：
 
 ```bash
-cd MRPC-2025-homework
+cd MRPC-2025-homework/code
 source devel/setup.bash
 roslaunch trajectory_generator test_control.launch
 ```
