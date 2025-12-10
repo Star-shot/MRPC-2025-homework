@@ -340,19 +340,32 @@ bool Astarpath::AstarSearch(Vector3d start_pt, Vector3d end_pt) {
 vector<Vector3d> Astarpath::getPath() {
   vector<Vector3d> path;
   vector<MappingNodePtr> front_path;
-do
-{
-terminatePtr->coord=gridIndex2coord(terminatePtr->index);
-front_path.push_back(terminatePtr);
-terminatePtr=terminatePtr->Father;
-}while(terminatePtr->Father!=NULL);
-  /**
-   *
-   * STEP 1.3:  追溯找到的路径
-   *
-   * **/
-
-  // ???
+  
+  // 检查 terminatePtr 是否有效
+  if (terminatePtr == NULL) {
+    ROS_ERROR("[A*] terminatePtr is NULL, cannot get path!");
+    return path;
+  }
+  
+  // 从终点回溯到起点
+  MappingNodePtr current = terminatePtr;
+  do {
+    current->coord = gridIndex2coord(current->index);
+    front_path.push_back(current);
+    current = current->Father;
+  } while (current != NULL);  // 修复：检查 current 是否为 NULL，而不是 current->Father
+  
+  // 将路径反转（从起点到终点）
+  for (int i = front_path.size() - 1; i >= 0; i--) {
+    path.push_back(front_path[i]->coord);
+  }
+  
+  ROS_INFO("[A*] Path extracted: %zu nodes", path.size());
+  if (path.size() > 0) {
+    ROS_INFO("[A*] Path start: [%.2f, %.2f, %.2f], end: [%.2f, %.2f, %.2f]",
+             path[0](0), path[0](1), path[0](2),
+             path[path.size()-1](0), path[path.size()-1](1), path[path.size()-1](2));
+  }
 
   return path;
 }
