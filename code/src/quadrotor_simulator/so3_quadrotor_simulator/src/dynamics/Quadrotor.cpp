@@ -198,13 +198,22 @@ void Quadrotor::operator()(const Quadrotor::InternalState& x,
 
   x_dot = cur_state.v;
   //请在这里补充完四旋翼飞机的动力学模型，提示：v_dot应该与重力，总推力，外力和空气阻力相关
-  // v_dot = //?????
+  // 根据牛顿第二定律：m * v_dot = F_thrust + F_gravity + F_external + F_drag
+  // 推力方向沿机体z轴，需要转换到世界坐标系：R * [0, 0, thrust]^T
+  // 重力方向沿世界z轴向下：-mg * [0, 0, 1]^T
+  // 空气阻力方向与速度相反：-resistance * vnorm
+  v_dot = (R * Eigen::Vector3d(0, 0, thrust) - mass_ * g_ * Eigen::Vector3d(0, 0, 1) 
+           + external_force_ - resistance * vnorm) / mass_;
 
   acc_ = v_dot;
 
   R_dot = R * omega_vee;
   //请在这里补充完四旋翼飞机的动力学模型，角速度导数的计算涉及到惯性矩阵J_的逆、力矩、科里奥利力（通过角速度与惯性矩阵和角速度的叉积来计算）和外部力矩等因素。
-  // omega_dot = //??????
+  // 根据欧拉方程：J * omega_dot = M - omega × (J * omega) + M_external
+  // 因此：omega_dot = J^(-1) * (M - omega × (J * omega) + M_external)
+  // 其中科里奥利力项 omega × (J * omega) 表示旋转坐标系中的惯性耦合效应
+  omega_dot = J_.inverse() * (moments - cur_state.omega.cross(J_ * cur_state.omega) 
+                               + external_moment_);
 
   motor_rpm_dot = (input_ - cur_state.motor_rpm) / motor_time_constant_;
 
