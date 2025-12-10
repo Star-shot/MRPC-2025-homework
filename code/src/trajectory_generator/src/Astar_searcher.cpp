@@ -190,7 +190,8 @@ double Astarpath::getHeu(MappingNodePtr node1, MappingNodePtr node2) {
   // 使用数字距离和一种类型的tie_breaker
   Vector3d diff = node1->coord - node2->coord;
   double heu = diff.norm();
-  double tie_breaker = 1.0 + 1.0 / 10000.0;  // 轻微放大启发式值，减少"走之"路径
+  // 【修改4】：稍微增大 tie_breaker 以加速搜索（会牺牲一点最优性）
+  double tie_breaker = 1.0 + 1.0 / 1000.0;  // 从 10000 改为 1000，加速搜索
   heu = heu * tie_breaker;
   
   return heu;
@@ -213,14 +214,36 @@ bool Astarpath::AstarSearch(Vector3d start_pt, Vector3d end_pt) {
            start_idx(0), start_idx(1), start_idx(2),
            end_idx(0), end_idx(1), end_idx(2));
 
+  // 【修改3】：检查终点是否在障碍物中
+  if(isOccupied(end_idx)) {
+    ROS_WARN("[A*] Goal is blocked! Skip path finding.");
+    return false;
+  }
+
   //start_point 和 end_point 的位置
   start_pt = gridIndex2coord(start_idx);
   end_pt = gridIndex2coord(end_idx);
 
-  // 初始化 struct MappingNode 的指针，分别代表 start node 和 goal node
-  // 
-  MappingNodePtr startPtr = new MappingNode(start_idx, start_pt);
-  MappingNodePtr endPtr = new MappingNode(end_idx, end_pt);
+  // 【修改2】：使用全局地图节点，而不是 new 新的节点
+  // 确保索引在安全范围内
+  if (start_idx(0) < 0 || start_idx(0) >= GRID_X_SIZE ||
+      start_idx(1) < 0 || start_idx(1) >= GRID_Y_SIZE ||
+      start_idx(2) < 0 || start_idx(2) >= GRID_Z_SIZE ||
+      end_idx(0) < 0 || end_idx(0) >= GRID_X_SIZE ||
+      end_idx(1) < 0 || end_idx(1) >= GRID_Y_SIZE ||
+      end_idx(2) < 0 || end_idx(2) >= GRID_Z_SIZE) {
+    ROS_ERROR("[A*] Start or Goal index out of bounds!");
+    return false;
+  }
+
+  if(isOccupied(start_idx)) {
+    ROS_WARN("[A*] Start is inside obstacle!");
+    return false;
+  }
+
+  // 使用全局地图中的指针，而不是 new 新的
+  MappingNodePtr startPtr = Map_Node[start_idx(0)][start_idx(1)][start_idx(2)];
+  MappingNodePtr endPtr = Map_Node[end_idx(0)][end_idx(1)][end_idx(2)];
 
   // Openset 是通过 STL 库中的 multimap 实现的open_list
   Openset.clear();
@@ -315,16 +338,21 @@ bool Astarpath::AstarSearch(Vector3d start_pt, Vector3d end_pt) {
       }
       else if(neighborPtr->id==1)
       {
-        // 已在open set中，检查是否需要更新
+        // 【修改1】：已在open set中，检查是否需要更新
         if (tentative_g_score < neighborPtr->g_score) {
           // 找到更优路径，更新节点
           neighborPtr->g_score = tentative_g_score;
           neighborPtr->f_score = neighborPtr->g_score + getHeu(neighborPtr, endPtr);
           neighborPtr->Father = currentPtr;
-          // 注意：multimap中不能直接更新，需要重新插入
-          // 这里简化处理，实际应该从Openset中删除后重新插入
+          
+          // 必须将更新后的节点重新插入 Openset
+          // 虽然旧的节点还在里面（f_score较大），但那是"懒删除"策略。
+          // 当我们稍后从 Openset 拿出旧节点时，因为它的 g_score 比当前存储的大，
+          // 可以通过检查忽略它，或者因为它是指针，拿出时数据已经是新的了。
+          // 关键是：必须放入新的 f_score 键值对，否则该节点永远不会因 f_score 变小而被提前遍历。
+          Openset.insert(make_pair(neighborPtr->f_score, neighborPtr));
         }
-      continue;
+        // continue; // 这里不需要 continue，循环自然结束
       }
     }
   }
