@@ -238,28 +238,66 @@ void rcvPointCloudCallBack(const sensor_msgs::PointCloud2 &pointcloud_map) {
 
  _astar_path_finder->resetOccupy();//新的一帧点云到来，需将占据容器清零；
 
+  // Debug: Check pointcloud fields
+  static int pc_debug_counter = 0;
+  if (pc_debug_counter % 100 == 0) {
+    ROS_INFO("[PointCloud] Received pointcloud with %d fields:", (int)pointcloud_map.fields.size());
+    for (size_t i = 0; i < pointcloud_map.fields.size(); i++) {
+      ROS_INFO("[PointCloud]   Field %zu: name='%s', offset=%d, datatype=%d, count=%d",
+               i, pointcloud_map.fields[i].name.c_str(),
+               pointcloud_map.fields[i].offset,
+               pointcloud_map.fields[i].datatype,
+               pointcloud_map.fields[i].count);
+    }
+  }
+  pc_debug_counter++;
+
   pcl::fromROSMsg(pointcloud_map, cloud);
   
-  if ((int)cloud.points.size() == 0)
+  if ((int)cloud.points.size() == 0) {
+    if (pc_debug_counter % 100 == 0) {
+      ROS_WARN("[PointCloud] Cloud is empty after conversion!");
+    }
     return;
+  }
+
+  if (pc_debug_counter % 100 == 0) {
+    ROS_INFO("[PointCloud] Converted to PCL cloud with %d points", (int)cloud.points.size());
+    if (cloud.points.size() > 0) {
+      ROS_INFO("[PointCloud] First point: [%.3f, %.3f, %.3f]",
+               cloud.points[0].x, cloud.points[0].y, cloud.points[0].z);
+    }
+  }
 
   pcl::PointXYZ pt;
+  int barrier_count = 0;
   for (int idx = 0; idx < (int)cloud.points.size(); idx++) {
     pt = cloud.points[idx];
     // set obstalces into grid map for path planning
     _astar_path_finder->set_barrier(pt.x, pt.y, pt.z);
+    barrier_count++;
+  }
+  
+  if (pc_debug_counter % 100 == 0) {
+    ROS_INFO("[PointCloud] Set %d barriers in grid map", barrier_count);
   }
 }
 
 
 bool trajGeneration() {
+  ROS_INFO("[TrajGen] Starting trajectory generation: start=[%.2f, %.2f, %.2f], target=[%.2f, %.2f, %.2f]",
+           start_pt(0), start_pt(1), start_pt(2),
+           target_pt(0), target_pt(1), target_pt(2));
 
   bool astar_success =_astar_path_finder->AstarSearch(start_pt, target_pt);
 
   if(!astar_success){
-     _astar_path_finder->resetUsedGrids();
+    ROS_WARN("[TrajGen] A* search failed!");
+    _astar_path_finder->resetUsedGrids();
     return false;
     }
+  
+  ROS_INFO("[TrajGen] A* search succeeded!");
       auto grid_path = _astar_path_finder->getPath();
   // Reset map for next call
       _astar_path_finder->resetUsedGrids();

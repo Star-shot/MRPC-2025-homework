@@ -199,11 +199,19 @@ double Astarpath::getHeu(MappingNodePtr node1, MappingNodePtr node2) {
 
 bool Astarpath::AstarSearch(Vector3d start_pt, Vector3d end_pt) {
   ros::Time time_1 = ros::Time::now();
+  
+  ROS_INFO("[A*] Starting search: start=[%.2f, %.2f, %.2f], end=[%.2f, %.2f, %.2f]",
+           start_pt(0), start_pt(1), start_pt(2),
+           end_pt(0), end_pt(1), end_pt(2));
 
   // start_point 和 end_point 索引
   Vector3i start_idx = coord2gridIndex(start_pt);
   Vector3i end_idx = coord2gridIndex(end_pt);
   goalIdx = end_idx;
+  
+  ROS_INFO("[A*] Grid indices: start=[%d, %d, %d], end=[%d, %d, %d]",
+           start_idx(0), start_idx(1), start_idx(2),
+           end_idx(0), end_idx(1), end_idx(2));
 
   //start_point 和 end_point 的位置
   start_pt = gridIndex2coord(start_idx);
@@ -247,7 +255,21 @@ bool Astarpath::AstarSearch(Vector3d start_pt, Vector3d end_pt) {
    *
    * **/
 
+  int iteration_count = 0;
   while (!Openset.empty()) {
+    iteration_count++;
+    
+    // 每1000次迭代输出一次进度
+    if (iteration_count % 1000 == 0) {
+      ROS_INFO("[A*] Iteration %d, Open set size: %zu", iteration_count, Openset.size());
+    }
+    
+    // 防止无限循环
+    if (iteration_count > 100000) {
+      ROS_ERROR("[A*] Too many iterations (%d), aborting search!", iteration_count);
+      return false;
+    }
+    
     //1.弹出g+h最小的节点
     auto it = Openset.begin();
     currentPtr = it->second;
@@ -257,9 +279,10 @@ bool Astarpath::AstarSearch(Vector3d start_pt, Vector3d end_pt) {
     if (currentPtr->index == goalIdx) {
       terminatePtr = currentPtr;
       ros::Time time_2 = ros::Time::now();
-      if ((time_2 - time_1).toSec() > 0.1)
-        ROS_WARN("Time consume in Astar path finding is %f",
-                 (time_2 - time_1).toSec());
+      double elapsed = (time_2 - time_1).toSec();
+      ROS_INFO("[A*] Path found! Iterations: %d, Time: %.3f s", iteration_count, elapsed);
+      if (elapsed > 0.1)
+        ROS_WARN("Time consume in Astar path finding is %f", elapsed);
       return true;
     }
     
