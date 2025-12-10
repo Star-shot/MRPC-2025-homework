@@ -111,13 +111,12 @@ void Quadrotor::step(double dt)
   state_.motor_rpm(2) = internal_state_[20];
   state_.motor_rpm(3) = internal_state_[21];
 
-  // Debug output for updated state (every 500 calls)
+  // Debug output for updated state (every 1000 calls to reduce spam)
   static int state_update_debug_counter = 0;
-  if (state_update_debug_counter % 500 == 0) {
-    ROS_INFO("[Quadrotor State] Updated Position: [%.3f, %.3f, %.3f], Velocity: [%.3f, %.3f, %.3f]",
+  if (state_update_debug_counter % 1000 == 0) {
+    ROS_INFO("[Quadrotor State] Position: [%.3f, %.3f, %.3f], Velocity: [%.3f, %.3f, %.3f], RPM: [%.1f, %.1f, %.1f, %.1f]",
              state_.x(0), state_.x(1), state_.x(2),
-             state_.v(0), state_.v(1), state_.v(2));
-    ROS_INFO("[Quadrotor State] Motor RPM: [%.1f, %.1f, %.1f, %.1f]",
+             state_.v(0), state_.v(1), state_.v(2),
              state_.motor_rpm(0), state_.motor_rpm(1), 
              state_.motor_rpm(2), state_.motor_rpm(3));
   }
@@ -199,14 +198,12 @@ void Quadrotor::operator()(const Quadrotor::InternalState& x,
   moments(2) = km_ * (motor_rpm_sq(0) + motor_rpm_sq(1) - motor_rpm_sq(2) -
                       motor_rpm_sq(3));
 
-  // Debug output (every 100 calls to reduce spam)
+  // Debug output (every 500 calls to reduce spam)
   static int debug_counter = 0;
-  if (debug_counter % 100 == 0) {
-    ROS_INFO("[Quadrotor Dynamics] Motor RPM: [%.1f, %.1f, %.1f, %.1f]", 
+  if (debug_counter % 500 == 0) {
+    ROS_INFO("[Quadrotor Dynamics] Motor RPM: [%.1f, %.1f, %.1f, %.1f], Thrust: %.6f", 
              cur_state.motor_rpm(0), cur_state.motor_rpm(1), 
-             cur_state.motor_rpm(2), cur_state.motor_rpm(3));
-    ROS_INFO("[Quadrotor Dynamics] Thrust: %.6f, Moments: [%.6f, %.6f, %.6f]", 
-             thrust, moments(0), moments(1), moments(2));
+             cur_state.motor_rpm(2), cur_state.motor_rpm(3), thrust);
     ROS_INFO("[Quadrotor Dynamics] Position: [%.3f, %.3f, %.3f], Velocity: [%.3f, %.3f, %.3f]",
              cur_state.x(0), cur_state.x(1), cur_state.x(2),
              cur_state.v(0), cur_state.v(1), cur_state.v(2));
@@ -234,23 +231,25 @@ void Quadrotor::operator()(const Quadrotor::InternalState& x,
   // 推力方向沿机体z轴，需要转换到世界坐标系：R * [0, 0, thrust]^T
   // 重力方向沿世界z轴向下：-mg * [0, 0, 1]^T
   // 空气阻力方向与速度相反：-resistance * vnorm
+  // 推力方向沿机体z轴，需要转换到世界坐标系
+  // R的第三列（R.col(2)）表示机体z轴在世界坐标系中的方向
   Eigen::Vector3d F_thrust = R * Eigen::Vector3d(0, 0, thrust);
   Eigen::Vector3d F_gravity = -mass_ * g_ * Eigen::Vector3d(0, 0, 1);
   Eigen::Vector3d F_drag = -resistance * vnorm;
   v_dot = (F_thrust + F_gravity + external_force_ + F_drag) / mass_;
 
-  // Debug output for forces
+  // Debug output for forces (every 500 calls, or when thrust changes significantly)
   static int force_debug_counter = 0;
-  if (force_debug_counter % 100 == 0) {
-    ROS_INFO("[Quadrotor Dynamics] Forces - Thrust: [%.3f, %.3f, %.3f], Gravity: [%.3f, %.3f, %.3f]",
+  static double last_thrust = 0.0;
+  bool thrust_changed = std::abs(thrust - last_thrust) > 0.1;
+  if (force_debug_counter % 500 == 0 || thrust_changed) {
+    ROS_INFO("[Quadrotor Dynamics] Thrust: %.6f, mg: %.6f, Diff: %.6f, v_dot_z: %.6f",
+             thrust, mass_ * g_, thrust - mass_ * g_, v_dot(2));
+    ROS_INFO("[Quadrotor Dynamics] F_thrust_world: [%.3f, %.3f, %.3f], R_z_axis: [%.3f, %.3f, %.3f]",
              F_thrust(0), F_thrust(1), F_thrust(2),
-             F_gravity(0), F_gravity(1), F_gravity(2));
-    ROS_INFO("[Quadrotor Dynamics] Forces - Drag: [%.3f, %.3f, %.3f], External: [%.3f, %.3f, %.3f]",
-             F_drag(0), F_drag(1), F_drag(2),
-             external_force_(0), external_force_(1), external_force_(2));
-    ROS_INFO("[Quadrotor Dynamics] v_dot: [%.6f, %.6f, %.6f]", 
-             v_dot(0), v_dot(1), v_dot(2));
+             R(0, 2), R(1, 2), R(2, 2));
   }
+  last_thrust = thrust;
   force_debug_counter++;
 
   acc_ = v_dot;
@@ -263,13 +262,11 @@ void Quadrotor::operator()(const Quadrotor::InternalState& x,
   Eigen::Vector3d coriolis_term = cur_state.omega.cross(J_ * cur_state.omega);
   omega_dot = J_.inverse() * (moments - coriolis_term + external_moment_);
 
-  // Debug output for angular dynamics
+  // Debug output for angular dynamics (only when significant)
   static int angular_debug_counter = 0;
-  if (angular_debug_counter % 100 == 0) {
-    ROS_INFO("[Quadrotor Dynamics] Omega: [%.6f, %.6f, %.6f], Coriolis: [%.6f, %.6f, %.6f]",
+  if (angular_debug_counter % 500 == 0 && omega_dot.norm() > 0.01) {
+    ROS_INFO("[Quadrotor Dynamics] Omega: [%.6f, %.6f, %.6f], omega_dot: [%.6f, %.6f, %.6f]",
              cur_state.omega(0), cur_state.omega(1), cur_state.omega(2),
-             coriolis_term(0), coriolis_term(1), coriolis_term(2));
-    ROS_INFO("[Quadrotor Dynamics] omega_dot: [%.6f, %.6f, %.6f]",
              omega_dot(0), omega_dot(1), omega_dot(2));
   }
   angular_debug_counter++;
@@ -303,13 +300,12 @@ void Quadrotor::operator()(const Quadrotor::InternalState& x,
     }
   }
   
-  // Debug output for state derivatives (every 200 calls)
+  // Debug output for state derivatives (only when significant)
   static int state_deriv_debug_counter = 0;
-  if (state_deriv_debug_counter % 200 == 0) {
-    ROS_INFO("[Quadrotor Dynamics] State Derivatives - x_dot: [%.6f, %.6f, %.6f], v_dot: [%.6f, %.6f, %.6f]",
-             dxdt[0], dxdt[1], dxdt[2], dxdt[3], dxdt[4], dxdt[5]);
-    ROS_INFO("[Quadrotor Dynamics] State Derivatives - omega_dot: [%.6f, %.6f, %.6f], motor_rpm_dot: [%.1f, %.1f, %.1f, %.1f]",
-             dxdt[15], dxdt[16], dxdt[17], dxdt[18], dxdt[19], dxdt[20], dxdt[21]);
+  Eigen::Vector3d v_dot_check(dxdt[3], dxdt[4], dxdt[5]);
+  if (state_deriv_debug_counter % 500 == 0 || v_dot_check.norm() > 0.01) {
+    ROS_INFO("[Quadrotor Dynamics] v_dot: [%.6f, %.6f, %.6f], Thrust: %.6f, mg: %.6f, Diff: %.6f",
+             dxdt[3], dxdt[4], dxdt[5], thrust, mass_ * g_, thrust - mass_ * g_);
   }
   state_deriv_debug_counter++;
 }
@@ -321,11 +317,14 @@ void Quadrotor::setInput(double u1, double u2, double u3, double u4)  //用于�
   input_(2) = u3;
   input_(3) = u4;
   
-  // Debug output for input (every 50 calls)
+  // Debug output for input (every 200 calls, or when input changes significantly)
   static int input_debug_counter = 0;
-  if (input_debug_counter % 50 == 0) {
+  static Eigen::Array4d last_input = Eigen::Array4d::Zero();
+  bool input_changed = (Eigen::Array4d(u1, u2, u3, u4) - last_input).abs().maxCoeff() > 100.0;
+  if (input_debug_counter % 200 == 0 || input_changed) {
     ROS_INFO("[Quadrotor Input] Received: [%.1f, %.1f, %.1f, %.1f]", u1, u2, u3, u4);
   }
+  last_input = Eigen::Array4d(u1, u2, u3, u4);
   input_debug_counter++;
   
   for (int i = 0; i < 4; i++)
@@ -347,7 +346,7 @@ void Quadrotor::setInput(double u1, double u2, double u3, double u4)  //用于�
     }
   }
   
-  if (input_debug_counter % 50 == 0) {
+  if (input_debug_counter % 200 == 0 || input_changed) {
     ROS_INFO("[Quadrotor Input] Final: [%.1f, %.1f, %.1f, %.1f]", 
              input_(0), input_(1), input_(2), input_(3));
   }
