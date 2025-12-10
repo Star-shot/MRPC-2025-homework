@@ -44,7 +44,6 @@ Quadrotor::Quadrotor(void)    //模型的初始化
   state_.motor_rpm = Eigen::Array4d::Zero();
 
   external_force_.setZero();
-  external_moment_.setZero();
 
   updateInternalState();
 
@@ -111,18 +110,6 @@ void Quadrotor::step(double dt)
   state_.motor_rpm(2) = internal_state_[20];
   state_.motor_rpm(3) = internal_state_[21];
 
-  // Debug output for updated state (only when position changes significantly)
-  static int state_update_debug_counter = 0;
-  static Eigen::Vector3d last_position = Eigen::Vector3d::Zero();
-  bool position_changed = (state_.x - last_position).norm() > 0.1;
-  if (position_changed) {
-    ROS_INFO("[Quadrotor State] Position changed: [%.3f, %.3f, %.3f] -> [%.3f, %.3f, %.3f]",
-             last_position(0), last_position(1), last_position(2),
-             state_.x(0), state_.x(1), state_.x(2));
-  }
-  last_position = state_.x;
-  state_update_debug_counter++;
-
   // Re-orthonormalize R (polar decomposition)
   Eigen::LLT<Eigen::Matrix3d> llt(state_.R.transpose() * state_.R);
   Eigen::Matrix3d             P = llt.matrixL();
@@ -184,7 +171,6 @@ void Quadrotor::operator()(const Quadrotor::InternalState& x,
   Eigen::Array4d motor_linear_velocity;
   Eigen::Array4d AOA;   //攻角的计算
   blade_linear_velocity = 0.104719755 * cur_state.motor_rpm.array() * prop_radius_;
-  motor_linear_velocity.setZero();  // Initialize motor_linear_velocity
   for (int i = 0; i < 4; ++i){
     AOA[i]   = alpha0 - atan2(motor_linear_velocity[i], blade_linear_velocity[i]) * 180 / 3.14159265;
   }
@@ -199,69 +185,28 @@ void Quadrotor::operator()(const Quadrotor::InternalState& x,
   moments(2) = km_ * (motor_rpm_sq(0) + motor_rpm_sq(1) - motor_rpm_sq(2) -
                       motor_rpm_sq(3));
 
-  // Debug output disabled to reduce spam
-  // Uncomment if needed for debugging
-  // static int debug_counter = 0;
-  // if (debug_counter % 1000 == 0) {
-  //   ROS_INFO("[Quadrotor Dynamics] Position: [%.3f, %.3f, %.3f], Thrust: %.6f",
-  //            cur_state.x(0), cur_state.x(1), cur_state.x(2), thrust);
-  // }
-  // debug_counter++;
-
   double resistance = 0.1 *                                        // C
                       3.14159265 * (arm_length_) * (arm_length_) * // S
                       cur_state.v.norm() * cur_state.v.norm();
 
 
   vnorm = cur_state.v;
-  if (vnorm.norm() > 1e-6)
+  if (vnorm.norm() != 0)
   {
     vnorm.normalize();
-  }
-  else
-  {
-    vnorm.setZero();
   }
 
   x_dot = cur_state.v;
   //请在这里补充完四旋翼飞机的动力学模型，提示：v_dot应该与重力，总推力，外力和空气阻力相关
-  // 根据牛顿第二定律：m * v_dot = F_thrust + F_gravity + F_external + F_drag
-  // 推力方向沿机体z轴，需要转换到世界坐标系：R * [0, 0, thrust]^T
-  // 重力方向沿世界z轴向下：-mg * [0, 0, 1]^T
-  // 空气阻力方向与速度相反：-resistance * vnorm
-  // 推力方向沿机体z轴，需要转换到世界坐标系
-  // R的第三列（R.col(2)）表示机体z轴在世界坐标系中的方向
-  Eigen::Vector3d F_thrust = R * Eigen::Vector3d(0, 0, thrust);
-  Eigen::Vector3d F_gravity = -mass_ * g_ * Eigen::Vector3d(0, 0, 1);
-  Eigen::Vector3d F_drag = -resistance * vnorm;
-  v_dot = (F_thrust + F_gravity + external_force_ + F_drag) / mass_;
+  // v_dot = //?????
 
-  // Debug output for forces (only when thrust changes significantly or v_dot is significant)
-  static int force_debug_counter = 0;
-  static double last_thrust = 0.0;
-  bool thrust_changed = std::abs(thrust - last_thrust) > 0.5;
-  bool significant_accel = std::abs(v_dot(2)) > 0.1;
-  if (thrust_changed || significant_accel) {
-    ROS_INFO("[Quadrotor Dynamics] Thrust: %.6f, mg: %.6f, Diff: %.6f, v_dot_z: %.6f",
-             thrust, mass_ * g_, thrust - mass_ * g_, v_dot(2));
-  }
-  last_thrust = thrust;
-  force_debug_counter++;
-
+  v_dot = (R * Eigen::Vector3d(0, 0, thrust) - Eigen::Vector3d(0, 0, mass_ * g_) + external_force_ - resistance * vnorm) / mass_;
   acc_ = v_dot;
 
   R_dot = R * omega_vee;
   //请在这里补充完四旋翼飞机的动力学模型，角速度导数的计算涉及到惯性矩阵J_的逆、力矩、科里奥利力（通过角速度与惯性矩阵和角速度的叉积来计算）和外部力矩等因素。
-  // 根据欧拉方程：J * omega_dot = M - omega × (J * omega) + M_external
-  // 因此：omega_dot = J^(-1) * (M - omega × (J * omega) + M_external)
-  // 其中科里奥利力项 omega × (J * omega) 表示旋转坐标系中的惯性耦合效应
-  Eigen::Vector3d coriolis_term = cur_state.omega.cross(J_ * cur_state.omega);
-  omega_dot = J_.inverse() * (moments - coriolis_term + external_moment_);
-
-  // Debug output for angular dynamics disabled
-  // static int angular_debug_counter = 0;
-  // angular_debug_counter++;
-
+  // omega_dot = //??????
+  omega_dot = J_.inverse() * (moments - cur_state.omega.cross(J_ * cur_state.omega) + external_moment_);
   motor_rpm_dot = (input_ - cur_state.motor_rpm) / motor_time_constant_;
 
   for (int i = 0; i < 3; i++)
@@ -277,19 +222,14 @@ void Quadrotor::operator()(const Quadrotor::InternalState& x,
   {
     dxdt[18 + i] = motor_rpm_dot(i);
   }
-  // Check for NaN values in derivatives
   for (int i = 0; i < 22; ++i)
   {
     if (std::isnan(dxdt[i]))
     {
       dxdt[i] = 0;
-      ROS_WARN("[Quadrotor Dynamics] NaN detected in dxdt[%d], set to 0", i);
+      //      std::cout << "nan apply to 0 for " << i << std::endl;
     }
   }
-  
-  // Debug output for state derivatives disabled
-  // static int state_deriv_debug_counter = 0;
-  // state_deriv_debug_counter++;
 }
 
 void Quadrotor::setInput(double u1, double u2, double u3, double u4)  //用于设置四旋翼飞行器的输入
@@ -298,39 +238,18 @@ void Quadrotor::setInput(double u1, double u2, double u3, double u4)  //用于�
   input_(1) = u2;
   input_(2) = u3;
   input_(3) = u4;
-  
-  // Debug output for input (only when input changes significantly)
-  static int input_debug_counter = 0;
-  static Eigen::Array4d last_input = Eigen::Array4d::Zero();
-  bool input_changed = (Eigen::Array4d(u1, u2, u3, u4) - last_input).abs().maxCoeff() > 100.0;
-  if (input_changed) {
-    ROS_INFO("[Quadrotor Input] Changed: [%.1f, %.1f, %.1f, %.1f] -> [%.1f, %.1f, %.1f, %.1f]",
-             last_input(0), last_input(1), last_input(2), last_input(3),
-             u1, u2, u3, u4);
-  }
-  last_input = Eigen::Array4d(u1, u2, u3, u4);
-  input_debug_counter++;
-  
   for (int i = 0; i < 4; i++)
   {
     if (std::isnan(input_(i)))
     {
       input_(i) = (max_rpm_ + min_rpm_) / 2;
-      ROS_WARN("[Quadrotor Input] NAN input detected at motor %d, set to %.1f", i, input_(i));
+      std::cout << "NAN input ";
     }
     if (input_(i) > max_rpm_)
-    {
-      ROS_WARN("[Quadrotor Input] Motor %d input %.1f exceeds max_rpm %.1f, clamped", i, input_(i), max_rpm_);
       input_(i) = max_rpm_;
-    }
     else if (input_(i) < min_rpm_)
-    {
-      ROS_WARN("[Quadrotor Input] Motor %d input %.1f below min_rpm %.1f, clamped", i, input_(i), min_rpm_);
       input_(i) = min_rpm_;
-    }
   }
-  
-  // Final input debug output disabled
 }
 
 const Quadrotor::State& Quadrotor::getState(void) const

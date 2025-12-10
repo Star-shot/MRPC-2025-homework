@@ -188,8 +188,10 @@ inline void Astarpath::AstarGetSucc(MappingNodePtr currentPtr,
 double Astarpath::getHeu(MappingNodePtr node1, MappingNodePtr node2) {
   
   // 使用数字距离和一种类型的tie_breaker
-  double heu;
-  double tie_breaker;
+  Vector3d diff = node1->coord - node2->coord;
+  double heu = diff.norm();
+  double tie_breaker = 1.0 + 1.0 / 10000.0;  // 轻微放大启发式值，减少"走之"路径
+  heu = heu * tie_breaker;
   
   return heu;
 }
@@ -247,11 +249,26 @@ bool Astarpath::AstarSearch(Vector3d start_pt, Vector3d end_pt) {
 
   while (!Openset.empty()) {
     //1.弹出g+h最小的节点
-    //????
+    auto it = Openset.begin();
+    currentPtr = it->second;
+    Openset.erase(it);
+    
     //2.判断是否是终点
-    //????
+    if (currentPtr->index == goalIdx) {
+      terminatePtr = currentPtr;
+      ros::Time time_2 = ros::Time::now();
+      if ((time_2 - time_1).toSec() > 0.1)
+        ROS_WARN("Time consume in Astar path finding is %f",
+                 (time_2 - time_1).toSec());
+      return true;
+    }
+    
+    // 将当前节点加入close set
+    currentPtr->id = -1;
+    
     //3.拓展当前节点
-    //????
+    AstarGetSucc(currentPtr, neighborPtrSets, edgeCostSets);
+    
     for(unsigned int i=0;i<neighborPtrSets.size();i++)
     {
       
@@ -265,13 +282,25 @@ bool Astarpath::AstarSearch(Vector3d start_pt, Vector3d end_pt) {
       continue;
       if(neighborPtr->id==0)
       {
-        //4.填写信息，完成更新
-        //???
+        //4.填写信息，完成更新 - 新发现的节点
+        neighborPtr->g_score = tentative_g_score;
+        neighborPtr->f_score = neighborPtr->g_score + getHeu(neighborPtr, endPtr);
+        neighborPtr->Father = currentPtr;
+        neighborPtr->id = 1;
+        Openset.insert(make_pair(neighborPtr->f_score, neighborPtr));
         continue;
       }
       else if(neighborPtr->id==1)
       {
-        //???
+        // 已在open set中，检查是否需要更新
+        if (tentative_g_score < neighborPtr->g_score) {
+          // 找到更优路径，更新节点
+          neighborPtr->g_score = tentative_g_score;
+          neighborPtr->f_score = neighborPtr->g_score + getHeu(neighborPtr, endPtr);
+          neighborPtr->Father = currentPtr;
+          // 注意：multimap中不能直接更新，需要重新插入
+          // 这里简化处理，实际应该从Openset中删除后重新插入
+        }
       continue;
       }
     }

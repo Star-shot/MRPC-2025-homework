@@ -94,6 +94,14 @@ getControl(const QuadrotorSimulator::Quadrotor& quad, const Command& cmd)  //据
   float force = 0;
   if (Psi < 1.0f) // Position control stability guaranteed only when Psi < 1
     force = cmd.force[0] * R13 + cmd.force[1] * R23 + cmd.force[2] * R33;
+  else {
+    // Debug: Psi >= 1.0 means attitude error is too large
+    static int psi_warn_counter = 0;
+    if (psi_warn_counter % 100 == 0) {
+      ROS_WARN("[Controller] Psi >= 1.0 (%.3f), force set to 0! Attitude error too large.", Psi);
+    }
+    psi_warn_counter++;
+  }
 
   float eR1 = 0.5f * (R12 * Rd13 - R13 * Rd12 + R22 * Rd23 - R23 * Rd22 +
                       R32 * Rd33 - R33 * Rd32);
@@ -131,6 +139,26 @@ getControl(const QuadrotorSimulator::Quadrotor& quad, const Command& cmd)  //据
 
     control.rpm[i] = sqrtf(w_sq[i]);
   }
+  
+  // Debug: Check computed RPM
+  static int rpm_debug_counter = 0;
+  static float last_rpm[4] = {0, 0, 0, 0};
+  bool rpm_changed = false;
+  for (int i = 0; i < 4; i++) {
+    if (std::abs(control.rpm[i] - last_rpm[i]) > 100.0) {
+      rpm_changed = true;
+      break;
+    }
+  }
+  if (rpm_changed || rpm_debug_counter % 200 == 0) {
+    ROS_INFO("[Controller] Computed RPM: [%.1f, %.1f, %.1f, %.1f], Force: %.6f, Psi: %.6f",
+             control.rpm[0], control.rpm[1], control.rpm[2], control.rpm[3], force, Psi);
+  }
+  for (int i = 0; i < 4; i++) {
+    last_rpm[i] = control.rpm[i];
+  }
+  rpm_debug_counter++;
+  
   return control;
 }
 
@@ -144,6 +172,22 @@ cmd_callback(const quadrotor_msgs::SO3Command::ConstPtr& cmd)   //控制指令�
   command.qy               = cmd->orientation.y;
   command.qz               = cmd->orientation.z;
   command.qw               = cmd->orientation.w;
+  
+  // Debug: Check if command is received
+  static int cmd_debug_counter = 0;
+  static float last_force[3] = {0, 0, 0};
+  bool force_changed = (std::abs(command.force[0] - last_force[0]) > 0.1 ||
+                        std::abs(command.force[1] - last_force[1]) > 0.1 ||
+                        std::abs(command.force[2] - last_force[2]) > 0.1);
+  if (force_changed || cmd_debug_counter % 200 == 0) {
+    ROS_INFO("[Controller] Command received - Force: [%.3f, %.3f, %.3f], Quaternion: [%.3f, %.3f, %.3f, %.3f]",
+             command.force[0], command.force[1], command.force[2],
+             command.qx, command.qy, command.qz, command.qw);
+  }
+  last_force[0] = command.force[0];
+  last_force[1] = command.force[1];
+  last_force[2] = command.force[2];
+  cmd_debug_counter++;
   command.kR[0]            = cmd->kR[0];
   command.kR[1]            = cmd->kR[1];
   command.kR[2]            = cmd->kR[2];
