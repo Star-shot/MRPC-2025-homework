@@ -7,7 +7,7 @@ def calculate_rmse_and_more():
     time_stamps2 = []
     length_increments = []
 
-    with open("/home/stuwork/MRPC-2025-homework/code/src/quadrotor_simulator/so3_control/src/control_data.txt", "r") as file:
+    with open("src/quadrotor_simulator/so3_control/src/control_data.txt", "r") as file:
         lines = file.readlines()
         for i, line in enumerate(lines):
             data = line.strip().split()
