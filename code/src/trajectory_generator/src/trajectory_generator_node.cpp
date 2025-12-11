@@ -287,7 +287,7 @@ void rcvPointCloudCallBack(const sensor_msgs::PointCloud2 &pointcloud_map) {
 
 
 // 规划算法选择: 0=A*, 1=Informed RRT*, 2=混合（先RRT*后A*）
-int planner_type = 2;  // 混合策略：先尝试RRT*，失败则用A*
+int planner_type = 0;  // 暂时只用A*（RRT*路径导致轨迹优化NaN问题待修复）
 
 // 性能测试函数：对比 A* 和 Informed RRT*
 void benchmarkPlanners(Vector3d start, Vector3d goal) {
