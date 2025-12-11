@@ -64,19 +64,24 @@ void Astarpath::set_barrier(const double coord_x, const double coord_y,
   int idx_y = static_cast<int>((coord_y - gl_yl) * inv_resolution);
   int idx_z = static_cast<int>((coord_z - gl_zl) * inv_resolution);
 
-  if (idx_x == 0 || idx_y == 0 || idx_z == GRID_Z_SIZE || idx_x == GRID_X_SIZE ||
-      idx_y == GRID_Y_SIZE)
-    data[idx_x * GLYZ_SIZE + idx_y * GRID_Z_SIZE + idx_z] = 1;
-  else {
-    data[idx_x * GLYZ_SIZE + idx_y * GRID_Z_SIZE + idx_z] = 1;
-    data[(idx_x + 1) * GLYZ_SIZE + (idx_y + 1) * GRID_Z_SIZE + idx_z] = 1;
-    data[(idx_x + 1) * GLYZ_SIZE + (idx_y - 1) * GRID_Z_SIZE + idx_z] = 1;
-    data[(idx_x - 1) * GLYZ_SIZE + (idx_y + 1) * GRID_Z_SIZE + idx_z] = 1;
-    data[(idx_x - 1) * GLYZ_SIZE + (idx_y - 1) * GRID_Z_SIZE + idx_z] = 1;
-    data[(idx_x)*GLYZ_SIZE + (idx_y + 1) * GRID_Z_SIZE + idx_z] = 1;
-    data[(idx_x)*GLYZ_SIZE + (idx_y - 1) * GRID_Z_SIZE + idx_z] = 1;
-    data[(idx_x + 1) * GLYZ_SIZE + (idx_y)*GRID_Z_SIZE + idx_z] = 1;
-    data[(idx_x - 1) * GLYZ_SIZE + (idx_y)*GRID_Z_SIZE + idx_z] = 1;
+  // 膨胀半径：2格 = 0.4m（增加安全边距）
+  int inflate_radius = 2;
+  
+  for (int dx = -inflate_radius; dx <= inflate_radius; dx++) {
+    for (int dy = -inflate_radius; dy <= inflate_radius; dy++) {
+      for (int dz = -1; dz <= 1; dz++) {  // Z轴也膨胀1格
+        int nx = idx_x + dx;
+        int ny = idx_y + dy;
+        int nz = idx_z + dz;
+        
+        // 边界检查
+        if (nx >= 0 && nx < GRID_X_SIZE &&
+            ny >= 0 && ny < GRID_Y_SIZE &&
+            nz >= 0 && nz < GRID_Z_SIZE) {
+          data[nx * GLYZ_SIZE + ny * GRID_Z_SIZE + nz] = 1;
+        }
+      }
+    }
   }
 }
 
