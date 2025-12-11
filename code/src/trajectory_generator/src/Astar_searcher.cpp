@@ -288,7 +288,7 @@ bool Astarpath::AstarSearch(Vector3d start_pt, Vector3d end_pt) {
     }
     
     // 防止无限循环
-    if (iteration_count > 100000) {
+    if (iteration_count > 1e7) {
       ROS_ERROR("[A*] Too many iterations (%d), aborting search!", iteration_count);
       return false;
     }
