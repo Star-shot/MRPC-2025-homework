@@ -287,12 +287,86 @@ void rcvPointCloudCallBack(const sensor_msgs::PointCloud2 &pointcloud_map) {
 
 
 // 规划算法选择: 0=A*, 1=Informed RRT*
-int planner_type = 1;  // 默认使用 Informed RRT*
+int planner_type = 1;  // 使用 Informed RRT*（已修复路径插值）
+
+// 性能测试函数：对比 A* 和 Informed RRT*
+void benchmarkPlanners(Vector3d start, Vector3d goal) {
+  ROS_WARN("========== PLANNER BENCHMARK ==========");
+  ROS_INFO("Start: [%.2f, %.2f, %.2f], Goal: [%.2f, %.2f, %.2f]",
+           start(0), start(1), start(2), goal(0), goal(1), goal(2));
+  ROS_INFO("Distance: %.2f m", (goal - start).norm());
+  
+  // ===== A* 测试 =====
+  ros::Time t1 = ros::Time::now();
+  bool astar_success = _astar_path_finder->AstarSearch(start, goal);
+  ros::Time t2 = ros::Time::now();
+  double astar_time = (t2 - t1).toSec() * 1000;  // 毫秒
+  
+  double astar_length = 0;
+  int astar_nodes = 0;
+  if (astar_success) {
+    auto astar_path = _astar_path_finder->getPath();
+    astar_nodes = astar_path.size();
+    for (size_t i = 1; i < astar_path.size(); i++) {
+      astar_length += (astar_path[i] - astar_path[i-1]).norm();
+    }
+  }
+  _astar_path_finder->resetUsedGrids();
+  
+  ROS_INFO("[A*] Time: %.2f ms, Success: %d, Nodes: %d, Length: %.2f m",
+           astar_time, astar_success, astar_nodes, astar_length);
+  
+  // ===== Informed RRT* 测试 =====
+  _rrt_planner->setObstacleChecker([](Eigen::Vector3d pos) {
+    Eigen::Vector3i idx = _astar_path_finder->c2i(pos);
+    return _astar_path_finder->is_occupy(idx);
+  });
+  
+  ros::Time t3 = ros::Time::now();
+  std::vector<Eigen::Vector3d> rrt_path;
+  bool rrt_success = _rrt_planner->plan(start, goal, rrt_path);
+  ros::Time t4 = ros::Time::now();
+  double rrt_time = (t4 - t3).toSec() * 1000;  // 毫秒
+  
+  double rrt_length = 0;
+  int rrt_nodes = 0;
+  if (rrt_success) {
+    rrt_nodes = rrt_path.size();
+    for (size_t i = 1; i < rrt_path.size(); i++) {
+      rrt_length += (rrt_path[i] - rrt_path[i-1]).norm();
+    }
+  }
+  
+  ROS_INFO("[RRT*] Time: %.2f ms, Success: %d, Nodes: %d, Length: %.2f m",
+           rrt_time, rrt_success, rrt_nodes, rrt_length);
+  
+  // ===== 对比结果 =====
+  ROS_WARN("---------- COMPARISON ----------");
+  if (astar_success && rrt_success) {
+    double time_ratio = rrt_time / astar_time;
+    double length_ratio = rrt_length / astar_length;
+    ROS_INFO("Time ratio (RRT*/A*): %.2fx", time_ratio);
+    ROS_INFO("Length ratio (RRT*/A*): %.2fx", length_ratio);
+    if (rrt_length < astar_length) {
+      ROS_INFO("RRT* path is %.1f%% shorter", (1 - length_ratio) * 100);
+    } else {
+      ROS_INFO("A* path is %.1f%% shorter", (length_ratio - 1) * 100);
+    }
+  }
+  ROS_WARN("================================");
+}
 
 bool trajGeneration() {
   ROS_INFO("[TrajGen] Starting trajectory generation: start=[%.2f, %.2f, %.2f], target=[%.2f, %.2f, %.2f]",
            start_pt(0), start_pt(1), start_pt(2),
            target_pt(0), target_pt(1), target_pt(2));
+
+  // 运行性能测试（仅首次规划时测试）
+  static bool benchmark_done = false;
+  if (!benchmark_done) {
+    benchmarkPlanners(start_pt, target_pt);
+    benchmark_done = true;
+  }
 
   MatrixXd path;
   bool success = false;
@@ -310,15 +384,46 @@ bool trajGeneration() {
     std::vector<Eigen::Vector3d> rrt_path;
     success = _rrt_planner->plan(start_pt, target_pt, rrt_path);
     
-    if (success) {
-      path = MatrixXd::Zero(rrt_path.size(), 3);
-      for (size_t k = 0; k < rrt_path.size(); k++) {
-        path.row(k) = rrt_path[k].transpose();
+    if (success && rrt_path.size() >= 2) {
+      // 检查路径点数量，如果太少则插值
+      if (rrt_path.size() < 4) {
+        ROS_WARN("[TrajGen] RRT* path has only %zu points, interpolating...", rrt_path.size());
+        std::vector<Eigen::Vector3d> interpolated;
+        for (size_t i = 0; i < rrt_path.size() - 1; i++) {
+          interpolated.push_back(rrt_path[i]);
+          // 在每两个点之间插入中点
+          Eigen::Vector3d mid = (rrt_path[i] + rrt_path[i+1]) / 2.0;
+          interpolated.push_back(mid);
+        }
+        interpolated.push_back(rrt_path.back());
+        rrt_path = interpolated;
+        ROS_INFO("[TrajGen] Interpolated to %zu points", rrt_path.size());
       }
-      ROS_INFO("[TrajGen] Informed RRT* found path with %zu waypoints", rrt_path.size());
-      visPathA(path);
+      
+      // 检查是否有 NaN
+      bool has_nan = false;
+      for (auto& p : rrt_path) {
+        if (std::isnan(p(0)) || std::isnan(p(1)) || std::isnan(p(2))) {
+          has_nan = true;
+          break;
+        }
+      }
+      
+      if (has_nan) {
+        ROS_ERROR("[TrajGen] RRT* path contains NaN! Falling back to A*");
+        success = false;
+        planner_type = 0;
+      } else {
+        path = MatrixXd::Zero(rrt_path.size(), 3);
+        for (size_t k = 0; k < rrt_path.size(); k++) {
+          path.row(k) = rrt_path[k].transpose();
+        }
+        ROS_INFO("[TrajGen] Informed RRT* found path with %zu waypoints", rrt_path.size());
+        visPathA(path);
+      }
     } else {
-      ROS_WARN("[TrajGen] Informed RRT* failed, falling back to A*");
+      ROS_WARN("[TrajGen] Informed RRT* failed or path too short, falling back to A*");
+      success = false;
       planner_type = 0;  // 回退到 A*
     }
   }
@@ -733,14 +838,14 @@ int main(int argc, char **argv) {
   _astar_path_finder->begin_grid_map(_resolution, _map_lower, _map_upper,
                                   _max_x_id, _max_y_id, _max_z_id);
 
-  // 初始化 Informed RRT* 规划器
+  // 初始化 Informed RRT* 规划器（稳定模式）
   _rrt_planner = new InformedRRTStar();
   _rrt_planner->initMap(_resolution, _map_lower, _map_upper);
-  _rrt_planner->setMaxIterations(3000);   // 最大迭代次数
-  _rrt_planner->setStepSize(0.5);         // 步长
-  _rrt_planner->setGoalBias(0.15);        // 目标偏向概率
-  _rrt_planner->setSearchRadius(1.5);     // 重布线搜索半径
-  ROS_INFO("[TrajGen] Informed RRT* planner initialized");
+  _rrt_planner->setMaxIterations(2000);   // 足够迭代找到好路径
+  _rrt_planner->setStepSize(0.5);         // 减小步长，更密集的路径点
+  _rrt_planner->setGoalBias(0.15);        // 目标偏向
+  _rrt_planner->setSearchRadius(1.5);     // 搜索半径
+  ROS_INFO("[TrajGen] Informed RRT* planner initialized (stable mode)");
 
   ros::Rate rate(100);
   bool status = ros::ok();

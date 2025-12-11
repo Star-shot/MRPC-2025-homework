@@ -153,15 +153,57 @@ void InformedRRTStar::rewire(NodePtr new_node, std::vector<NodePtr>& near_nodes)
 }
 
 std::vector<Eigen::Vector3d> InformedRRTStar::extractPath(NodePtr goal_node) {
-    std::vector<Eigen::Vector3d> path;
+    std::vector<Eigen::Vector3d> raw_path;
     NodePtr current = goal_node;
     
     while (current != nullptr) {
-        path.push_back(current->pos);
+        raw_path.push_back(current->pos);
         current = current->parent;
     }
     
-    std::reverse(path.begin(), path.end());
+    std::reverse(raw_path.begin(), raw_path.end());
+    
+    // 路径插值：确保相邻点距离不超过 0.5m
+    std::vector<Eigen::Vector3d> path;
+    double max_segment = 0.5;  // 最大段长度
+    
+    for (size_t i = 0; i < raw_path.size(); i++) {
+        if (i == 0) {
+            path.push_back(raw_path[i]);
+            continue;
+        }
+        
+        Eigen::Vector3d prev = raw_path[i-1];
+        Eigen::Vector3d curr = raw_path[i];
+        double dist = (curr - prev).norm();
+        
+        if (dist > max_segment) {
+            // 需要插值
+            int n_segments = (int)ceil(dist / max_segment);
+            for (int j = 1; j <= n_segments; j++) {
+                double t = (double)j / n_segments;
+                Eigen::Vector3d interp = prev + t * (curr - prev);
+                path.push_back(interp);
+            }
+        } else {
+            path.push_back(curr);
+        }
+    }
+    
+    // 确保至少有5个点（多项式拟合需要）
+    while (path.size() < 5 && path.size() >= 2) {
+        std::vector<Eigen::Vector3d> new_path;
+        for (size_t i = 0; i < path.size(); i++) {
+            new_path.push_back(path[i]);
+            if (i < path.size() - 1) {
+                Eigen::Vector3d mid = (path[i] + path[i+1]) / 2.0;
+                new_path.push_back(mid);
+            }
+        }
+        path = new_path;
+    }
+    
+    ROS_INFO("[Informed RRT*] Path interpolated: %zu -> %zu points", raw_path.size(), path.size());
     return path;
 }
 
