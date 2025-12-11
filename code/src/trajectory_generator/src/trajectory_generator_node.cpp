@@ -170,9 +170,8 @@ void execCallback(const ros::TimerEvent &e) {
     time_Count++;
     ros::Time time_now = ros::Time::now();
     double t_cur = (time_now - time_traj_start).toSec();
-    double t_replan = ros::Duration(1, 0).toSec();
+    double t_replan = ros::Duration(0, 200000000).toSec();  // 0.2秒（原1秒太慢）
     t_cur = min(time_duration, t_cur);
-
 
     if (t_cur > time_duration - 1e-2) {
       has_target = false;
@@ -192,8 +191,9 @@ void execCallback(const ros::TimerEvent &e) {
   case REPLAN_TRAJ: {
     ros::Time time_now = ros::Time::now();
     double t_cur = (time_now - time_traj_start).toSec();
-    double t_delta = ros::Duration(0, 50).toSec();
-    t_cur = t_delta + t_cur;
+    // 预测 0.3秒后的位置作为新起点（给规划留出时间）
+    double t_delta = 0.3;
+    t_cur = min(t_cur + t_delta, time_duration - 0.1);
     start_pt = getPos(t_cur);
     start_vel = getVel(t_cur);
     bool success = trajGeneration();
