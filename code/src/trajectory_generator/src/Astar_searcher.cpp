@@ -64,29 +64,20 @@ void Astarpath::set_barrier(const double coord_x, const double coord_y,
   int idx_y = static_cast<int>((coord_y - gl_yl) * inv_resolution);
   int idx_z = static_cast<int>((coord_z - gl_zl) * inv_resolution);
 
-  // 膨胀半径：1.5格 = 0.3m（圆形膨胀）
-  double inflate_radius = 1.5;
-  int search_range = 2;  // 搜索范围需要覆盖1.5
-  
-  for (int dx = -search_range; dx <= search_range; dx++) {
-    for (int dy = -search_range; dy <= search_range; dy++) {
-      for (int dz = -1; dz <= 1; dz++) {  // Z轴膨胀1格
-        // 计算欧几里得距离
-        double dist = sqrt(dx*dx + dy*dy);
-        if (dist > inflate_radius) continue;  // 超出1.5格范围跳过
-        
-        int nx = idx_x + dx;
-        int ny = idx_y + dy;
-        int nz = idx_z + dz;
-        
-        // 边界检查
-        if (nx >= 0 && nx < GRID_X_SIZE &&
-            ny >= 0 && ny < GRID_Y_SIZE &&
-            nz >= 0 && nz < GRID_Z_SIZE) {
-          data[nx * GLYZ_SIZE + ny * GRID_Z_SIZE + nz] = 1;
-        }
-      }
-    }
+  // 简单膨胀：3x3 XY平面（与原版相同）
+  if (idx_x == 0 || idx_y == 0 || idx_z == GRID_Z_SIZE || idx_x == GRID_X_SIZE ||
+      idx_y == GRID_Y_SIZE)
+    data[idx_x * GLYZ_SIZE + idx_y * GRID_Z_SIZE + idx_z] = 1;
+  else {
+    data[idx_x * GLYZ_SIZE + idx_y * GRID_Z_SIZE + idx_z] = 1;
+    data[(idx_x + 1) * GLYZ_SIZE + (idx_y + 1) * GRID_Z_SIZE + idx_z] = 1;
+    data[(idx_x + 1) * GLYZ_SIZE + (idx_y - 1) * GRID_Z_SIZE + idx_z] = 1;
+    data[(idx_x - 1) * GLYZ_SIZE + (idx_y + 1) * GRID_Z_SIZE + idx_z] = 1;
+    data[(idx_x - 1) * GLYZ_SIZE + (idx_y - 1) * GRID_Z_SIZE + idx_z] = 1;
+    data[(idx_x)*GLYZ_SIZE + (idx_y + 1) * GRID_Z_SIZE + idx_z] = 1;
+    data[(idx_x)*GLYZ_SIZE + (idx_y - 1) * GRID_Z_SIZE + idx_z] = 1;
+    data[(idx_x + 1) * GLYZ_SIZE + (idx_y)*GRID_Z_SIZE + idx_z] = 1;
+    data[(idx_x - 1) * GLYZ_SIZE + (idx_y)*GRID_Z_SIZE + idx_z] = 1;
   }
 }
 
@@ -292,13 +283,13 @@ bool Astarpath::AstarSearch(Vector3d start_pt, Vector3d end_pt) {
   while (!Openset.empty()) {
     iteration_count++;
     
-    // 每1000次迭代输出一次进度
-    if (iteration_count % 1000 == 0) {
+    // 每10000次迭代输出一次进度（减少日志量）
+    if (iteration_count % 10000 == 0) {
       ROS_INFO("[A*] Iteration %d, Open set size: %zu", iteration_count, Openset.size());
     }
     
-    // 防止无限循环
-    if (iteration_count > 1e7) {
+    // 防止无限循环（最大2百万次迭代）
+    if (iteration_count > 2000000) {
       ROS_ERROR("[A*] Too many iterations (%d), aborting search!", iteration_count);
       return false;
     }

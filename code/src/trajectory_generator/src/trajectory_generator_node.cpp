@@ -286,8 +286,8 @@ void rcvPointCloudCallBack(const sensor_msgs::PointCloud2 &pointcloud_map) {
 }
 
 
-// 规划算法选择: 0=A*, 1=Informed RRT*
-int planner_type = 1;  // 使用 Informed RRT*（已修复路径插值）
+// 规划算法选择: 0=A*, 1=Informed RRT*, 2=混合（先RRT*后A*）
+int planner_type = 2;  // 混合策略：先尝试RRT*，失败则用A*
 
 // 性能测试函数：对比 A* 和 Informed RRT*
 void benchmarkPlanners(Vector3d start, Vector3d goal) {
@@ -361,19 +361,21 @@ bool trajGeneration() {
            start_pt(0), start_pt(1), start_pt(2),
            target_pt(0), target_pt(1), target_pt(2));
 
-  // 运行性能测试（仅首次规划时测试）
-  static bool benchmark_done = false;
-  if (!benchmark_done) {
-    benchmarkPlanners(start_pt, target_pt);
-    benchmark_done = true;
-  }
+  // 性能测试已禁用（会导致重复搜索，影响实时性）
+  // static bool benchmark_done = false;
+  // if (!benchmark_done) {
+  //   benchmarkPlanners(start_pt, target_pt);
+  //   benchmark_done = true;
+  // }
 
   MatrixXd path;
   bool success = false;
+  int current_planner = planner_type;
   
-  if (planner_type == 1) {
+  // 混合策略或单独 RRT*
+  if (current_planner == 1 || current_planner == 2) {
     // Informed RRT* 规划
-    ROS_INFO("[TrajGen] Using Informed RRT* planner");
+    ROS_INFO("[TrajGen] Trying Informed RRT* planner...");
     
     // 设置障碍物检查函数
     _rrt_planner->setObstacleChecker([](Eigen::Vector3d pos) {
@@ -382,24 +384,11 @@ bool trajGeneration() {
     });
     
     std::vector<Eigen::Vector3d> rrt_path;
+    ros::Time rrt_start = ros::Time::now();
     success = _rrt_planner->plan(start_pt, target_pt, rrt_path);
+    double rrt_time = (ros::Time::now() - rrt_start).toSec();
     
     if (success && rrt_path.size() >= 2) {
-      // 检查路径点数量，如果太少则插值
-      if (rrt_path.size() < 4) {
-        ROS_WARN("[TrajGen] RRT* path has only %zu points, interpolating...", rrt_path.size());
-        std::vector<Eigen::Vector3d> interpolated;
-        for (size_t i = 0; i < rrt_path.size() - 1; i++) {
-          interpolated.push_back(rrt_path[i]);
-          // 在每两个点之间插入中点
-          Eigen::Vector3d mid = (rrt_path[i] + rrt_path[i+1]) / 2.0;
-          interpolated.push_back(mid);
-        }
-        interpolated.push_back(rrt_path.back());
-        rrt_path = interpolated;
-        ROS_INFO("[TrajGen] Interpolated to %zu points", rrt_path.size());
-      }
-      
       // 检查是否有 NaN
       bool has_nan = false;
       for (auto& p : rrt_path) {
@@ -410,36 +399,43 @@ bool trajGeneration() {
       }
       
       if (has_nan) {
-        ROS_ERROR("[TrajGen] RRT* path contains NaN! Falling back to A*");
+        ROS_ERROR("[TrajGen] RRT* path contains NaN!");
         success = false;
-        planner_type = 0;
       } else {
         path = MatrixXd::Zero(rrt_path.size(), 3);
         for (size_t k = 0; k < rrt_path.size(); k++) {
           path.row(k) = rrt_path[k].transpose();
         }
-        ROS_INFO("[TrajGen] Informed RRT* found path with %zu waypoints", rrt_path.size());
+        ROS_INFO("[TrajGen] RRT* succeeded! %zu waypoints, %.3f s", rrt_path.size(), rrt_time);
         visPathA(path);
       }
     } else {
-      ROS_WARN("[TrajGen] Informed RRT* failed or path too short, falling back to A*");
+      ROS_WARN("[TrajGen] RRT* failed (%.3f s)", rrt_time);
       success = false;
-      planner_type = 0;  // 回退到 A*
+    }
+    
+    // 混合策略：RRT* 失败则回退到 A*
+    if (!success && current_planner == 2) {
+      ROS_INFO("[TrajGen] Falling back to A*...");
+      current_planner = 0;
     }
   }
   
-  if (planner_type == 0) {
-    // A* 规划
-    ROS_INFO("[TrajGen] Using A* planner");
+  // A* 规划
+  if (current_planner == 0 && !success) {
+    ROS_INFO("[TrajGen] Using A* planner (may take time for complex maps)...");
+    ros::Time astar_start = ros::Time::now();
     bool astar_success = _astar_path_finder->AstarSearch(start_pt, target_pt);
+    double astar_time = (ros::Time::now() - astar_start).toSec();
 
     if(!astar_success){
-      ROS_WARN("[TrajGen] A* search failed!");
+      ROS_WARN("[TrajGen] A* search failed! (%.3f s)", astar_time);
       _astar_path_finder->resetUsedGrids();
       return false;
     }
   
-    ROS_INFO("[TrajGen] A* search succeeded!");
+    ROS_INFO("[TrajGen] A* succeeded! (%.3f s)", astar_time);
+    success = true;
     auto grid_path = _astar_path_finder->getPath();
     _astar_path_finder->resetUsedGrids();
     
@@ -838,14 +834,14 @@ int main(int argc, char **argv) {
   _astar_path_finder->begin_grid_map(_resolution, _map_lower, _map_upper,
                                   _max_x_id, _max_y_id, _max_z_id);
 
-  // 初始化 Informed RRT* 规划器（稳定模式）
+  // 初始化 Informed RRT* 规划器（混合模式：快速尝试）
   _rrt_planner = new InformedRRTStar();
   _rrt_planner->initMap(_resolution, _map_lower, _map_upper);
-  _rrt_planner->setMaxIterations(2000);   // 足够迭代找到好路径
-  _rrt_planner->setStepSize(0.5);         // 减小步长，更密集的路径点
-  _rrt_planner->setGoalBias(0.15);        // 目标偏向
-  _rrt_planner->setSearchRadius(1.5);     // 搜索半径
-  ROS_INFO("[TrajGen] Informed RRT* planner initialized (stable mode)");
+  _rrt_planner->setMaxIterations(5000);   // 增加迭代次数
+  _rrt_planner->setStepSize(0.8);         // 适中步长
+  _rrt_planner->setGoalBias(0.2);         // 较高目标偏向，更快找到路径
+  _rrt_planner->setSearchRadius(2.0);     // 搜索半径
+  ROS_INFO("[TrajGen] Hybrid planner: RRT* (5000 iter) + A* (fallback)");
 
   ros::Rate rate(100);
   bool status = ros::ok();
