@@ -64,12 +64,17 @@ void Astarpath::set_barrier(const double coord_x, const double coord_y,
   int idx_y = static_cast<int>((coord_y - gl_yl) * inv_resolution);
   int idx_z = static_cast<int>((coord_z - gl_zl) * inv_resolution);
 
-  // 膨胀半径：2格 = 0.4m（增加安全边距）
-  int inflate_radius = 2;
+  // 膨胀半径：1.5格 = 0.3m（圆形膨胀）
+  double inflate_radius = 1.5;
+  int search_range = 2;  // 搜索范围需要覆盖1.5
   
-  for (int dx = -inflate_radius; dx <= inflate_radius; dx++) {
-    for (int dy = -inflate_radius; dy <= inflate_radius; dy++) {
-      for (int dz = -1; dz <= 1; dz++) {  // Z轴也膨胀1格
+  for (int dx = -search_range; dx <= search_range; dx++) {
+    for (int dy = -search_range; dy <= search_range; dy++) {
+      for (int dz = -1; dz <= 1; dz++) {  // Z轴膨胀1格
+        // 计算欧几里得距离
+        double dist = sqrt(dx*dx + dy*dy);
+        if (dist > inflate_radius) continue;  // 超出1.5格范围跳过
+        
         int nx = idx_x + dx;
         int ny = idx_y + dy;
         int nz = idx_z + dz;

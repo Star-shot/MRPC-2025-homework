@@ -22,12 +22,14 @@
 #include "Astar_searcher.h"
 #include "backward.hpp"
 #include "trajectory_generator_waypoint.h"
+#include "informed_rrt.h"
 
 using namespace std;
 using namespace Eigen;
 std::ofstream dataFiles;
 
 TrajectoryGeneratorWaypoint *_trajGene = new TrajectoryGeneratorWaypoint();
+InformedRRTStar *_rrt_planner = new InformedRRTStar();
 Astarpath *_astar_path_finder = new Astarpath();
 
 // Set the obstacle map
@@ -284,35 +286,73 @@ void rcvPointCloudCallBack(const sensor_msgs::PointCloud2 &pointcloud_map) {
 }
 
 
+// 规划算法选择: 0=A*, 1=Informed RRT*
+int planner_type = 1;  // 默认使用 Informed RRT*
+
 bool trajGeneration() {
   ROS_INFO("[TrajGen] Starting trajectory generation: start=[%.2f, %.2f, %.2f], target=[%.2f, %.2f, %.2f]",
            start_pt(0), start_pt(1), start_pt(2),
            target_pt(0), target_pt(1), target_pt(2));
 
-  bool astar_success =_astar_path_finder->AstarSearch(start_pt, target_pt);
+  MatrixXd path;
+  bool success = false;
+  
+  if (planner_type == 1) {
+    // Informed RRT* 规划
+    ROS_INFO("[TrajGen] Using Informed RRT* planner");
+    
+    // 设置障碍物检查函数
+    _rrt_planner->setObstacleChecker([](Eigen::Vector3d pos) {
+      Eigen::Vector3i idx = _astar_path_finder->c2i(pos);
+      return _astar_path_finder->is_occupy(idx);
+    });
+    
+    std::vector<Eigen::Vector3d> rrt_path;
+    success = _rrt_planner->plan(start_pt, target_pt, rrt_path);
+    
+    if (success) {
+      path = MatrixXd::Zero(rrt_path.size(), 3);
+      for (size_t k = 0; k < rrt_path.size(); k++) {
+        path.row(k) = rrt_path[k].transpose();
+      }
+      ROS_INFO("[TrajGen] Informed RRT* found path with %zu waypoints", rrt_path.size());
+      visPathA(path);
+    } else {
+      ROS_WARN("[TrajGen] Informed RRT* failed, falling back to A*");
+      planner_type = 0;  // 回退到 A*
+    }
+  }
+  
+  if (planner_type == 0) {
+    // A* 规划
+    ROS_INFO("[TrajGen] Using A* planner");
+    bool astar_success = _astar_path_finder->AstarSearch(start_pt, target_pt);
 
-  if(!astar_success){
-    ROS_WARN("[TrajGen] A* search failed!");
-    _astar_path_finder->resetUsedGrids();
-    return false;
+    if(!astar_success){
+      ROS_WARN("[TrajGen] A* search failed!");
+      _astar_path_finder->resetUsedGrids();
+      return false;
     }
   
-  ROS_INFO("[TrajGen] A* search succeeded!");
-      auto grid_path = _astar_path_finder->getPath();
-  // Reset map for next call
-      _astar_path_finder->resetUsedGrids();
-  MatrixXd path(int(grid_path.size()), 3);
-  for (int k = 0; k < int(grid_path.size()); k++) {
-    path.row(k) = grid_path[k].transpose();
-  }
-  visPathA(path);
+    ROS_INFO("[TrajGen] A* search succeeded!");
+    auto grid_path = _astar_path_finder->getPath();
+    _astar_path_finder->resetUsedGrids();
+    
+    path = MatrixXd::Zero(int(grid_path.size()), 3);
+    for (int k = 0; k < int(grid_path.size()); k++) {
+      path.row(k) = grid_path[k].transpose();
+    }
+    visPathA(path);
 
-  grid_path = _astar_path_finder->pathSimplify(grid_path, _path_resolution);
-  // grid_path = _astar_path_finder->getPath();
-  path=MatrixXd::Zero(int(grid_path.size()), 3);
-  for (int k = 0; k < int(grid_path.size()); k++) {
-    path.row(k) = grid_path[k].transpose();
+    grid_path = _astar_path_finder->pathSimplify(grid_path, _path_resolution);
+    path = MatrixXd::Zero(int(grid_path.size()), 3);
+    for (int k = 0; k < int(grid_path.size()); k++) {
+      path.row(k) = grid_path[k].transpose();
+    }
+    success = true;
   }
+  
+  if (!success) return false;
 
   trajOptimization(path);
   time_duration = _polyTime.sum();
@@ -692,6 +732,15 @@ int main(int argc, char **argv) {
   _astar_path_finder = new Astarpath();
   _astar_path_finder->begin_grid_map(_resolution, _map_lower, _map_upper,
                                   _max_x_id, _max_y_id, _max_z_id);
+
+  // 初始化 Informed RRT* 规划器
+  _rrt_planner = new InformedRRTStar();
+  _rrt_planner->initMap(_resolution, _map_lower, _map_upper);
+  _rrt_planner->setMaxIterations(3000);   // 最大迭代次数
+  _rrt_planner->setStepSize(0.5);         // 步长
+  _rrt_planner->setGoalBias(0.15);        // 目标偏向概率
+  _rrt_planner->setSearchRadius(1.5);     // 重布线搜索半径
+  ROS_INFO("[TrajGen] Informed RRT* planner initialized");
 
   ros::Rate rate(100);
   bool status = ros::ok();
